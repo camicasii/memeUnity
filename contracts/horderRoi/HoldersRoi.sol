@@ -12,7 +12,7 @@ contract HoldersRoi is Ownable, Pausable {
     uint256 internal constant FEE = 100;
     uint256 internal constant REFERRAL_PERCENTS = 10;
     uint256 internal constant PERCENTS_DIVIDER = 1000;
-    uint256 internal constant TIME_UPDATE = 30 seconds;
+    uint256 internal constant TIME_UPDATE = 1 hours;
     uint256 internal constant uplineLevels = 10;
 
     uint256 internal usersID;
@@ -95,18 +95,21 @@ contract HoldersRoi is Ownable, Pausable {
         if (user.referrer != address(0)) {
             address upline = user.referrer;
             address lastUpline = msg.sender;
+            uint256 tempCurrentBonus = currentTotalBonus;
             uint256 uplineReward =
                 depAmount.mul(REFERRAL_PERCENTS).div(PERCENTS_DIVIDER);
             for (uint256 i = 0; i < uplineLevels; i++) {
                 if (upline != address(0) && lastUpline != upline) {
                     User storage userUpline = users[upline];
                     userUpline.bonus = userUpline.bonus.add(uplineReward);
-                    currentTotalBonus = currentTotalBonus.add(uplineReward);
+                    tempCurrentBonus = tempCurrentBonus.add(uplineReward);
                     emit RefBonus(upline, msg.sender, i, uplineReward);
                     lastUpline = upline;
                     upline = userUpline.referrer;
                 } else break;
+                
             }
+        currentTotalBonus = currentTotalBonus.add(tempCurrentBonus);
         }
         user.totalInvest = user.totalInvest.add(depAmount);
         totalInvest = totalInvest.add(depAmount);

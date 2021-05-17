@@ -109,7 +109,7 @@ contract HoldersRoi is Ownable, Pausable {
                 } else break;
                 
             }
-        currentTotalBonus = currentTotalBonus.add(tempCurrentBonus);
+        currentTotalBonus = tempCurrentBonus;
         }
         user.totalInvest = user.totalInvest.add(depAmount);
         totalInvest = totalInvest.add(depAmount);

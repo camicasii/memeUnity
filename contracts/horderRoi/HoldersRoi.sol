@@ -9,18 +9,22 @@ contract HoldersRoi is Ownable, Pausable {
     using SafeMath for uint256;
     IERC20 public token;
 
-    uint256 internal constant WITHDRAW_COOLDOWN = 1 hours;
+    
     uint256 internal constant FEE = 100;
     uint256 internal constant REFERRAL_PERCENTS = 10;
+    uint256 internal constant MAX_BALANCE_WITHDRAW = 800;
     uint256 internal constant PERCENTS_DIVIDER = 1000;
-    uint256 internal constant TIME_UPDATE = 1 hours;
+    uint256 internal constant TIME_UPDATE = 30 seconds;
     uint256 internal constant uplineLevels = 10;
-
-    uint256 public usersCount;
+    
+    uint256 internal usersID;
+    
     uint256 public lastBalanceUpdate;
     uint256 public rewardPerUser;
     uint256 public totalInvest;
     uint256 public totalWithdrawn;
+    
+    
 
     event Newbie(address user);
     event Withdrawn(address indexed user, uint256 amount);
@@ -34,12 +38,13 @@ contract HoldersRoi is Ownable, Pausable {
     event NewDeposit(address indexed user, uint256 amount);
 
     mapping(address => User) private users;
+    mapping(uint256 => address) private usersAutoPayment;
 
     struct User {
+        address userAddress;
         address referrer;
         uint256 totalInvest;
         uint256 totalWithdrawn;
-        uint256 checkpoint;
         uint256 bonus;
     }
 
@@ -57,49 +62,34 @@ contract HoldersRoi is Ownable, Pausable {
     modifier checkUser_() {
         User memory user_ = users[msg.sender];
         require(
-            isUser(user_) &&
-                (block.timestamp.sub(user_.checkpoint)).div(
-                    WITHDRAW_COOLDOWN
-                ) >=
-                1,
-            "try again later"
-        );
+            isUser(user_), 'not is user');
         _;
     }
-
-    modifier checkUserReferralWithdraw() {
-        User memory user_ = users[msg.sender];
-        require(isUser(user_), "try again later");
-        _;
-    }
-
     function unpause() external whenPaused returns (bool) {
         _unpause();
         return true;
     }
 
     function isUser(User memory user_) internal pure returns (bool) {
-        return (user_.checkpoint > 0);
+        return (user_.userAddress != address(0));
     }
 
     function register(address referrer, uint256 depAmount) external {
         token.transferFrom(msg.sender, address(this), depAmount);
-        token.transferFrom(
-            msg.sender,
-            owner(),
-            depAmount.mul(FEE).div(PERCENTS_DIVIDER)
-        );
+        token.transfer(owner(),depAmount.mul(FEE).div(PERCENTS_DIVIDER));
 
         User storage user = users[msg.sender];
         User memory uplineHandler = users[referrer];
 
         if (user.referrer == address(0)) {
-            if (user.checkpoint == 0) {
-                usersCount++;
+            if (!isUser(user)) {
+                usersAutoPayment[usersID]=msg.sender;
+                user.userAddress = msg.sender;
+                usersID++;
                 emit Newbie(msg.sender);
             }
 
-            if (isUser(uplineHandler) && referrer != msg.sender)
+            if (referrer == owner() || ( isUser(uplineHandler) && referrer != msg.sender ) )
                 user.referrer = referrer;
         }
 
@@ -116,7 +106,6 @@ contract HoldersRoi is Ownable, Pausable {
                 } else break;
             }
         }
-        user.checkpoint = block.timestamp;
         user.totalInvest = user.totalInvest.add(depAmount);
         totalInvest = totalInvest.add(depAmount);
         updatebaseReward();
@@ -126,32 +115,36 @@ contract HoldersRoi is Ownable, Pausable {
     function userData(address userAddress)
         external
         view
-        returns (User memory user_, uint256 nextWithdraw_)
+        returns (User memory user_)
     {
         User memory user = users[userAddress];
         user_ = user;
-        nextWithdraw_ = user.checkpoint.add(WITHDRAW_COOLDOWN);
     }
 
     function getContractBalance() public view returns (uint256) {
         return token.balanceOf(address(this));
     }
 
-    function updatebaseReward() internal {
-        if (block.timestamp.sub(lastBalanceUpdate) >= TIME_UPDATE) {
-            rewardPerUser = getContractBalance().div(usersCount);
+    function usersCount() public view returns(uint256){
+        return usersID;
+    }
+    function updatebaseReward() internal returns(bool) {
+        if (block.timestamp.sub(lastBalanceUpdate) >= TIME_UPDATE){
+            uint256 currentBalance =getContractBalance().mul(MAX_BALANCE_WITHDRAW).div(PERCENTS_DIVIDER); //80% 
+            rewardPerUser = currentBalance.div(usersCount()); 
             lastBalanceUpdate = block.timestamp;
+            return true;
         }
+        return false;
     }
 
     function referralWithdraw()
         external
         contractHasfunds_
         whenNotPaused
-        checkUserReferralWithdraw
+        checkUser_
         returns (bool)
     {
-        updatebaseReward();
         User storage user = users[msg.sender];
         uint256 amount = user.bonus;
         require(amount > 0, "you do not bonus currently");
@@ -170,16 +163,17 @@ contract HoldersRoi is Ownable, Pausable {
         checkUser_
         returns (bool)
     {
-        updatebaseReward();
-        User storage user = users[msg.sender];
-        uint256 contractBalance = getContractBalance();
-        uint256 withdrawAmt = rewardPerUser;
-        user.checkpoint = block.timestamp;
-        if (withdrawAmt > contractBalance) withdrawAmt = contractBalance;
-        user.totalWithdrawn = user.totalWithdrawn.add(withdrawAmt);
-        token.transfer(msg.sender, withdrawAmt);
-        totalWithdrawn = totalWithdrawn.add(withdrawAmt);
-        emit Withdrawn(msg.sender, withdrawAmt);
+        if(updatebaseReward()){
+        uint256 currentBalance =getContractBalance().mul(MAX_BALANCE_WITHDRAW).div(PERCENTS_DIVIDER);    
+        for(uint256 i = 0; i < usersID; i++){
+            User storage user = users[ usersAutoPayment[i]];
+            user.totalWithdrawn = user.totalWithdrawn.add(rewardPerUser);
+            token.transfer(user.userAddress, rewardPerUser);
+            emit Withdrawn(user.userAddress, rewardPerUser);
+        }
+        totalWithdrawn = totalWithdrawn.add(currentBalance);
         return true;
+        }
+        return false;
     }
 }

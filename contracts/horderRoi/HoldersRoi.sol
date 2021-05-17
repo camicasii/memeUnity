@@ -9,22 +9,19 @@ contract HoldersRoi is Ownable, Pausable {
     using SafeMath for uint256;
     IERC20 public token;
 
-    
     uint256 internal constant FEE = 100;
     uint256 internal constant REFERRAL_PERCENTS = 10;
-    uint256 internal constant MAX_BALANCE_WITHDRAW = 800;
     uint256 internal constant PERCENTS_DIVIDER = 1000;
     uint256 internal constant TIME_UPDATE = 30 seconds;
     uint256 internal constant uplineLevels = 10;
-    
+
     uint256 internal usersID;
-    
+
     uint256 public lastBalanceUpdate;
     uint256 public rewardPerUser;
     uint256 public totalInvest;
     uint256 public totalWithdrawn;
-    
-    
+    uint256 public currentTotalBonus;
 
     event Newbie(address user);
     event Withdrawn(address indexed user, uint256 amount);
@@ -37,7 +34,7 @@ contract HoldersRoi is Ownable, Pausable {
     );
     event NewDeposit(address indexed user, uint256 amount);
 
-    mapping(address => User) private users;
+    mapping(address => User) public users;
     mapping(uint256 => address) private usersAutoPayment;
 
     struct User {
@@ -61,10 +58,10 @@ contract HoldersRoi is Ownable, Pausable {
 
     modifier checkUser_() {
         User memory user_ = users[msg.sender];
-        require(
-            isUser(user_), 'not is user');
+        require(isUser(user_), "not is user");
         _;
     }
+
     function unpause() external whenPaused returns (bool) {
         _unpause();
         return true;
@@ -76,32 +73,37 @@ contract HoldersRoi is Ownable, Pausable {
 
     function register(address referrer, uint256 depAmount) external {
         token.transferFrom(msg.sender, address(this), depAmount);
-        token.transfer(owner(),depAmount.mul(FEE).div(PERCENTS_DIVIDER));
+        token.transfer(owner(), depAmount.mul(FEE).div(PERCENTS_DIVIDER));
 
         User storage user = users[msg.sender];
         User memory uplineHandler = users[referrer];
 
         if (user.referrer == address(0)) {
             if (!isUser(user)) {
-                usersAutoPayment[usersID]=msg.sender;
+                usersAutoPayment[usersID] = msg.sender;
                 user.userAddress = msg.sender;
                 usersID++;
                 emit Newbie(msg.sender);
             }
 
-            if (referrer == owner() || ( isUser(uplineHandler) && referrer != msg.sender ) )
-                user.referrer = referrer;
+            if (
+                referrer == owner() ||
+                (isUser(uplineHandler) && referrer != msg.sender)
+            ) user.referrer = referrer;
         }
 
         if (user.referrer != address(0)) {
             address upline = user.referrer;
+            address lastUpline = msg.sender;
             uint256 uplineReward =
                 depAmount.mul(REFERRAL_PERCENTS).div(PERCENTS_DIVIDER);
             for (uint256 i = 0; i < uplineLevels; i++) {
-                if (upline != address(0)) {
+                if (upline != address(0) && lastUpline != upline) {
                     User storage userUpline = users[upline];
                     userUpline.bonus = userUpline.bonus.add(uplineReward);
+                    currentTotalBonus = currentTotalBonus.add(uplineReward);
                     emit RefBonus(upline, msg.sender, i, uplineReward);
+                    lastUpline = upline;
                     upline = userUpline.referrer;
                 } else break;
             }
@@ -125,13 +127,15 @@ contract HoldersRoi is Ownable, Pausable {
         return token.balanceOf(address(this));
     }
 
-    function usersCount() public view returns(uint256){
+    function usersCount() public view returns (uint256) {
         return usersID;
     }
-    function updatebaseReward() internal returns(bool) {
-        if (block.timestamp.sub(lastBalanceUpdate) >= TIME_UPDATE){
-            uint256 currentBalance =getContractBalance().mul(MAX_BALANCE_WITHDRAW).div(PERCENTS_DIVIDER); //80% 
-            rewardPerUser = currentBalance.div(usersCount()); 
+
+    function updatebaseReward() internal returns (bool) {
+        if (block.timestamp.sub(lastBalanceUpdate) >= TIME_UPDATE) {
+            uint256 currentBalance =
+                getContractBalance().sub(currentTotalBonus);
+            rewardPerUser = currentBalance.div(usersCount());
             lastBalanceUpdate = block.timestamp;
             return true;
         }
@@ -151,6 +155,7 @@ contract HoldersRoi is Ownable, Pausable {
         user.bonus = 0;
         token.transfer(msg.sender, amount);
         user.totalWithdrawn = user.totalWithdrawn.add(amount);
+        currentTotalBonus = currentTotalBonus.sub(amount);
         totalWithdrawn = totalWithdrawn.add(amount);
         emit WithdrawnRefBonus(msg.sender, amount);
         return true;
@@ -163,16 +168,17 @@ contract HoldersRoi is Ownable, Pausable {
         checkUser_
         returns (bool)
     {
-        if(updatebaseReward()){
-        uint256 currentBalance =getContractBalance().mul(MAX_BALANCE_WITHDRAW).div(PERCENTS_DIVIDER);    
-        for(uint256 i = 0; i < usersID; i++){
-            User storage user = users[ usersAutoPayment[i]];
-            user.totalWithdrawn = user.totalWithdrawn.add(rewardPerUser);
-            token.transfer(user.userAddress, rewardPerUser);
-            emit Withdrawn(user.userAddress, rewardPerUser);
-        }
-        totalWithdrawn = totalWithdrawn.add(currentBalance);
-        return true;
+        if (updatebaseReward()) {
+            uint256 currentBalance =
+                getContractBalance().sub(currentTotalBonus);
+            for (uint256 i = 0; i < usersID; i++) {
+                User storage user = users[usersAutoPayment[i]];
+                user.totalWithdrawn = user.totalWithdrawn.add(rewardPerUser);
+                token.transfer(user.userAddress, rewardPerUser);
+                emit Withdrawn(user.userAddress, rewardPerUser);
+            }
+            totalWithdrawn = totalWithdrawn.add(currentBalance);
+            return true;
         }
         return false;
     }
